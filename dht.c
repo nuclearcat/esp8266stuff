@@ -4,7 +4,7 @@
  * Licensed under the GPLv2
  * <http://www.gnu.org/licenses/old-licenses/gpl-2.0.txt>
  *
- * DHT11/DHT22 driver for ESP8266 FreeRTOS SDK
+ * DHT11/DHT22/AM2302/AM2320 driver for ESP8266 FreeRTOS SDK
  * Driver made by more strictly following standards than random sources
  *
  * Driver can use much less mem (define LOWMEM), if instead of measuring number
