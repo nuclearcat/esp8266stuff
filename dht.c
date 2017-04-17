@@ -76,20 +76,22 @@ int waittransition(uint level) {
                 return(0);
 }
 
+void dht_init(void) {
+  OW_PIN_INIT();
+  OW_PIN_NOPULLUP();
+}
+
 /*
  * Important info from datasheet (AM2320)
  * 3.3V - max 1m wire length, 5V max 30m. 5.1K pullup resistor for data line.
  * Do not poll sensor more often than each 2S
- * return 0 on success, 1 on failure
+ * return 0 on success, 1 on failure(data invalid)
 */
 int dht_read(int *temp, int *hum) {
         uint8_t data[5];
         int i;
 
         memset(data, 0x0, 5);
-        OW_PIN_INIT();
-        OW_PIN_NOPULLUP();
-
         /* Not in specs, but device should see transition from low to high
            Might be reduced
         */
@@ -109,25 +111,25 @@ int dht_read(int *temp, int *hum) {
         portENTER_CRITICAL();
         OW_DIR_IN();
         /* Tbe, to Tgo, might be <= 1 */
-        if (!waittransition(1))
+        if (!waittransition(HIGH))
                 goto bad;
 
         /* Tgo, to Trel */
-        if (!waittransition(0))
+        if (!waittransition(LOW))
                 goto bad;
 
         /* Trel, to Treh */
-        if (!waittransition(1))
+        if (!waittransition(HIGH))
                 goto bad;
 
         /* Treh, to first byte Tlow */
-        if (!waittransition(0))
+        if (!waittransition(LOW))
                 goto bad;
         {
                 int lowcycles, highcycles;
                 for (i=0; i<40; ++i) {
-                        lowcycles   = waittransition(1);
-                        highcycles  = waittransition(0);
+                        lowcycles   = waittransition(HIGH);
+                        highcycles  = waittransition(LOW);
                         data[i/8] <<= 1;
                         if (highcycles > lowcycles)
                                 data[i/8] |= 1;
@@ -142,25 +144,25 @@ int dht_read(int *temp, int *hum) {
         {
                 OW_DIR_IN();
                 /* Tbe, to Tgo, might be <= 1 */
-                if (!waittransition(1))
+                if (!waittransition(HIGH))
                         goto bad;
 
                 /* Tgo, to Trel */
-                if (!waittransition(0))
+                if (!waittransition(LOW))
                         goto bad;
 
                 /* Trel, to Treh */
-                if (!waittransition(1))
+                if (!waittransition(HIGH))
                         goto bad;
 
                 /* Treh, to first byte Tlow */
-                if (!waittransition(0))
+                if (!waittransition(LOW))
                         goto bad;
 
                 /* Each bit, [i] duration of low pulse, [i+1] - high pulse */
                 for (i=0; i<80; i+=2) {
-                        cycles[i]   = waittransition(1);
-                        cycles[i+1] = waittransition(0);
+                        cycles[i]   = waittransition(HIGH);
+                        cycles[i+1] = waittransition(LOW);
                 }
         }
         portEXIT_CRITICAL();
@@ -176,7 +178,7 @@ int dht_read(int *temp, int *hum) {
                 uint32_t highCycles = cycles[2*i+1];
                 /* On errors - quit */
                 if ((lowCycles == 0) || (highCycles == 0)) {
-                        return(0);
+                        return(1);
                 }
                 /* Add bits for each byte if high cycle is more than low */
                 data[i/8] <<= 1;
