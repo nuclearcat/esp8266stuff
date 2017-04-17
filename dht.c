@@ -1,8 +1,24 @@
+/*
+ *  Copyright (C) 2017, Denys Fedoryshchenko
+ * Contact: <nuclearcat@nuclearcat.com>
+ * Licensed under the GPLv2
+ * <http://www.gnu.org/licenses/old-licenses/gpl-2.0.txt>
+ *
+ * DHT11/DHT22 driver for ESP8266 FreeRTOS SDK
+ * Driver made by more strictly following standards than random sources
+ *
+ * Driver can use much less mem (define LOWMEM), if instead of measuring number
+ * of cycles&storing them, we use Tlow with Thigh comparison, but it is more prone to errors
+ * due measurement jitter, as algoritm execution time varies and tiny code are
+ * in "time critical" part
+ */
+
 #include "esp_common.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <gpio.h>
 /*
+   Following list for PIN_FUNC_SELECT and PIN_PULLUP_DIS
    GPIO0:	PERIPHS_IO_MUX_GPIO0_U
    GPIO1:	PERIPHS_IO_MUX_U0TXD_U
    GPIO2:	PERIPHS_IO_MUX_GPIO2_U
@@ -21,28 +37,38 @@
    GPIO15:	PERIPHS_IO_MUX_MTDO_U
  */
 
-/* ESP12 PIN4 and PIN5 swapped :@ */
-#define OW_PIN_NUM 4
-#define OW_GET_IN()   ( GPIO_INPUT_GET(GPIO_ID_PIN(OW_PIN_NUM)) )
+/*
+ * Define here your PIN and init for it
+ * WARNING: PIN4 and PIN5 swapped :( at most of ESP12 modules
+ */
+#define OW_PIN_NUM    4
+#define OW_PIN_INIT() PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO4_U, FUNC_GPIO4)
+#define OW_PIN_NOPULLUP() PIN_PULLUP_DIS(PERIPHS_IO_MUX_GPIO4_U)
+#define OW_GET_IN()   GPIO_INPUT_GET(GPIO_ID_PIN(OW_PIN_NUM))
 #define OW_OUT_LOW()  ( GPIO_OUTPUT_SET(GPIO_ID_PIN(OW_PIN_NUM), 0) )
 #define OW_OUT_HIGH() ( GPIO_OUTPUT_SET(GPIO_ID_PIN(OW_PIN_NUM), 1) )
 #define OW_DIR_IN()   ( GPIO_DIS_OUTPUT(GPIO_ID_PIN(OW_PIN_NUM)) )
 
-void delay_ms(uint32_t ms)
-{
+#define MAXWAIT 1000000 /* Max waiting cycles in waittransition */
+#define HIGH    1
+#define LOW     0
+
+/* Keep it for lower mem usage */
+#define LOWMEM
+
+void delay_ms(uint32_t ms) {
         uint32_t i;
         for (i = 0; i < ms; i++)
                 os_delay_us(1000);
 }
 
-#define MAXWAIT 1000000
-int expectpulse(uint level) {
+/* Return number of cycles it waited for level, or 0 on error */
+int waittransition(uint level) {
         int waittime = MAXWAIT-1;
         while (waittime--) {
                 if (OW_GET_IN() == level) {
                         break;
                 }
-                //os_delay_us(1);
         }
         if (waittime)
                 return(MAXWAIT-waittime);
@@ -55,53 +81,98 @@ int dht_read(int *temp, int *hum) {
         int i;
 
         memset(data, 0x0, 5);
-        PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO4_U, FUNC_GPIO4);
-        PIN_PULLUP_DIS(PERIPHS_IO_MUX_GPIO4_U);
+        OW_PIN_INIT();
+        OW_PIN_NOPULLUP();
 
+        /* Not in specs, but device should see transition from low to high */
         OW_OUT_HIGH();
-        delay_ms(250);
+        delay_ms(25);
+        /* T be, you may increase delay to ~20ms(max) if you have
+         *  high capacitance on data line
+         */
         OW_OUT_LOW();
-        delay_ms(5); // Tbe (Host starting signal low time)
+        delay_ms(5);
 
+#ifdef LOWMEM
+        portENTER_CRITICAL();
+        OW_DIR_IN();
+        /* Tbe, to Tgo, might be <= 1 */
+        if (!waittransition(1))
+                goto bad;
+
+        /* Tgo, to Trel */
+        if (!waittransition(0))
+                goto bad;
+
+        /* Trel, to Treh */
+        if (!waittransition(1))
+                goto bad;
+
+        /* Treh, to first byte Tlow */
+        if (!waittransition(0))
+                goto bad;
+        {
+                int lowcycles, highcycles;
+                for (i=0; i<40; ++i) {
+                        lowcycles   = waittransition(1);
+                        highcycles  = waittransition(0);
+                        data[i/8] <<= 1;
+                        if (highcycles > lowcycles)
+                                data[i/8] |= 1;
+                }
+        }
+
+        portEXIT_CRITICAL();
+#else
+        /* Don't add anything here, time critical code */
         portENTER_CRITICAL();
         uint32_t cycles[80];
         {
-                int i;
                 OW_DIR_IN();
-
-                i = expectpulse(1);
-                if (!i)
+                /* Tbe, to Tgo, might be <= 1 */
+                if (!waittransition(1))
                         goto bad;
 
-                i = expectpulse(0);
-                if (!i)
+                /* Tgo, to Trel */
+                if (!waittransition(0))
                         goto bad;
 
-                i = expectpulse(1);
-                if (!i)
+                /* Trel, to Treh */
+                if (!waittransition(1))
                         goto bad;
 
-                i = expectpulse(0);
-                if (!i)
+                /* Treh, to first byte Tlow */
+                if (!waittransition(0))
                         goto bad;
 
+                /* Each bit, [i] duration of low pulse, [i+1] - high pulse */
                 for (i=0; i<80; i+=2) {
-                        cycles[i]   = expectpulse(1);
-                        cycles[i+1] = expectpulse(0);
+                        cycles[i]   = waittransition(1);
+                        cycles[i+1] = waittransition(0);
                 }
         }
         portEXIT_CRITICAL();
+
+        /*
+           // In case you want to debug received timing values
+           for (i=0;i<40;i++) { printf("[%d]%02X:",i,cycles[i]);}
+         */
+
+        /* Time critical finished, processing data */
         for (i=0; i<40; ++i) {
                 uint32_t lowCycles  = cycles[2*i];
                 uint32_t highCycles = cycles[2*i+1];
+                /* On errors - quit */
                 if ((lowCycles == 0) || (highCycles == 0)) {
                         return(0);
                 }
+                /* Add bits for each byte if high cycle is more than low */
                 data[i/8] <<= 1;
                 if (highCycles > lowCycles) {
                         data[i/8] |= 1;
                 }
         }
+#endif
 
         *hum = ((data[0] << 8) + data[1]);
         if ( *hum > 1000 )
@@ -110,6 +181,7 @@ int dht_read(int *temp, int *hum) {
         *temp = (((data[2] & 0x7F) << 8) + data[3]);
         if ( *temp > 1250 )
                 *temp = data[2];
+        /* Negative temperature */
         if ( data[2] & 0x80 )
                 *temp = -*temp;
 
