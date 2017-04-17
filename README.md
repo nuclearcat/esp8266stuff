@@ -15,7 +15,6 @@ You can disable #define LOWMEM and do debugging of cycles numbers, in case you
 experience any kind of problems.
 I strongly recommend to not add any code in time critical section, as it may make
 recognition of bits unreliable.
-WiP as CRC check need to be implemented.
 
 # ds18b20.c
 Tested on DS1820 (old model), but should work on others as well.

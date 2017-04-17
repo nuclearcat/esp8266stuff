@@ -188,6 +188,10 @@ int dht_read(int *temp, int *hum) {
         }
 #endif
 
+        /* Verify checksum */
+        if (((data[0] + data[1] + data[2] + data[3]) & 0xFF) != data[4])
+          return(2);
+
         *hum = ((data[0] << 8) + data[1]);
 
         /* DHT11 specific */
