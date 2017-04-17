@@ -49,7 +49,7 @@
 #define OW_OUT_HIGH() ( GPIO_OUTPUT_SET(GPIO_ID_PIN(OW_PIN_NUM), 1) )
 #define OW_DIR_IN()   ( GPIO_DIS_OUTPUT(GPIO_ID_PIN(OW_PIN_NUM)) )
 
-#define MAXWAIT 1000000 /* Max waiting cycles in waittransition */
+#define MAXWAIT 1000000 /* Max waiting cycles in waittransition, approx 1s */
 #define HIGH    1
 #define LOW     0
 
@@ -62,7 +62,7 @@ void delay_ms(uint32_t ms) {
                 os_delay_us(1000);
 }
 
-/* Return number of cycles it waited for level, or 0 on error */
+/* Return number of cycles it waited for level, or 0 on failure */
 int waittransition(uint level) {
         int waittime = MAXWAIT-1;
         while (waittime--) {
@@ -76,6 +76,12 @@ int waittransition(uint level) {
                 return(0);
 }
 
+/*
+ * Important info from datasheet (AM2320)
+ * 3.3V - max 1m wire length, 5V max 30m. 5.1K pullup resistor for data line.
+ * Do not poll sensor more often than each 2S
+ * return 0 on success, 1 on failure
+*/
 int dht_read(int *temp, int *hum) {
         uint8_t data[5];
         int i;
@@ -84,15 +90,21 @@ int dht_read(int *temp, int *hum) {
         OW_PIN_INIT();
         OW_PIN_NOPULLUP();
 
-        /* Not in specs, but device should see transition from low to high */
+        /* Not in specs, but device should see transition from low to high
+           Might be reduced
+        */
         OW_OUT_HIGH();
         delay_ms(25);
-        /* T be, you may increase delay to ~20ms(max) if you have
-         *  high capacitance on data line
+
+        /* Tbe, you may adjust delay to 80us-20ms, esp. if you have
+         *  high capacitance on data line, or its long. By specs at least 80us
          */
         OW_OUT_LOW();
         delay_ms(5);
-
+        /* Time critical part might introduce lag to your realtime functions
+        * Best (ideal) case lag 2950us, worst case 5370us, with non-critical
+        * section (but it is "schedulable") ~30ms
+        */
 #ifdef LOWMEM
         portENTER_CRITICAL();
         OW_DIR_IN();
@@ -175,18 +187,22 @@ int dht_read(int *temp, int *hum) {
 #endif
 
         *hum = ((data[0] << 8) + data[1]);
+
+        /* DHT11 specific */
         if ( *hum > 1000 )
                 *hum = data[0];
 
         *temp = (((data[2] & 0x7F) << 8) + data[3]);
+
+        /* DHT11 specific */
         if ( *temp > 1250 )
                 *temp = data[2];
         /* Negative temperature */
         if ( data[2] & 0x80 )
                 *temp = -*temp;
 
-        return(1);
+        return(0);
 bad:
         portEXIT_CRITICAL();
-        return(0);
+        return(1);
 }
