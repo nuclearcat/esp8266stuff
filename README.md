@@ -4,6 +4,7 @@ This drivers intended to be used in ESP8266 RTOS SDK, made with efforts to follo
 specs strictly as possible, to avoid unexplainable problems as on other drivers.
 Unfortunately, as onewire/singlewire protocol is available only by bitbang,
 time critical section might introduce scheduling delays to RTOS (it's unavoidable).
+
 You can reduce MAXWAIT to lower values, to decrease timeout if onewire/singlewire
 device is not reachable.
 
